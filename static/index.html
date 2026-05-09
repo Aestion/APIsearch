@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Model Tester</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>API Model Tester</h1>
+
+        <form id="testForm">
+            <div class="form-group">
+                <label for="baseUrl">API Base URL</label>
+                <input type="url" id="baseUrl" name="baseUrl"
+                       placeholder="https://api.openai.com" required>
+            </div>
+
+            <div id="formatTag" class="format-tag hidden">
+                <span class="tag-label">API格式：</span>
+                <span id="formatType" class="tag-value"></span>
+            </div>
+
+            <div class="form-group">
+                <label for="apiKey">API Key</label>
+                <input type="password" id="apiKey" name="apiKey"
+                       placeholder="sk-..." required>
+            </div>
+
+            <div class="button-group">
+                <button type="button" id="smartBtn" class="smart">Smart Test (平台+本地)</button>
+                <button type="submit" id="testBtn">Test Models</button>
+                <button type="button" id="syncBtn" class="secondary">Sync from OpenRouter</button>
+            </div>
+
+            <div id="modelInfo" class="model-info">
+                <span id="modelCount">Loading...</span>
+            </div>
+        </form>
+
+        <div id="syncStatus" class="sync-status hidden"></div>
+
+        <div id="progress" class="progress hidden">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <span id="progressText">Testing: 0 / 0</span>
+        </div>
+
+        <div id="results" class="results hidden">
+            <h2>Results</h2>
+            <table id="resultsTable">
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Response Time</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody">
+                </tbody>
+            </table>
+
+            <div id="summary" class="summary hidden">
+                <span id="summaryAvailable">Available: 0</span>
+                <span id="summaryUnavailable">Unavailable: 0</span>
+                <span id="summaryTotal">Total: 0</span>
+            </div>
+        </div>
+
+        <div id="error" class="error hidden"></div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
