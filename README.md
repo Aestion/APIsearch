@@ -34,8 +34,13 @@ pip install -r requirements.txt
 
 ## 使用方法
 
+### 方式一：一键启动（Windows）
+
+双击 `start.bat` 文件，将自动启动服务并打开浏览器访问 http://localhost:8000
+
+### 方式二：手动启动
+
 ```bash
-# 启动Web服务
 python web_app.py
 ```
 
