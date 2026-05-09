@@ -272,6 +272,22 @@ tbody tr:hover {
     font-size: 12px;
 }
 
+/* Platform Model */
+.platform-row {
+    background-color: #f0f7ff;
+}
+
+.platform-badge {
+    color: #4a90d9;
+    font-size: 14px;
+    margin-right: 4px;
+}
+
+.platform-row .model-name {
+    color: #2c5aa0;
+    font-weight: 500;
+}
+
 /* Response Time */
 .time-fast {
     color: #28a745;

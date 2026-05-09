@@ -209,9 +209,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function addResultRow(result) {
         const row = document.createElement('tr');
         row.id = `row-${result.model}`;
+        if (result.source === 'platform') {
+            row.classList.add('platform-row');
+        }
 
         const modelCell = document.createElement('td');
-        modelCell.textContent = result.display_name || result.model;
+        if (result.source === 'platform') {
+            modelCell.innerHTML = `<span class="platform-badge" title="Platform model">🌐</span> <span class="model-name">${result.display_name || result.model}</span>`;
+        } else {
+            modelCell.innerHTML = `<span class="model-name">${result.display_name || result.model}</span>`;
+        }
 
         const typeCell = document.createElement('td');
         typeCell.innerHTML = `<span class="type-badge">${result.type}</span>`;

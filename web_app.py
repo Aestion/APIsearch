@@ -964,9 +964,7 @@ async def smart_test_stream(
         phase1_models = []
         for m in platform_models:
             mtype = detect_model_type(m)
-            # DEBUG: 打印所有模型的类型
-            print(f"[DEBUG] Platform model: {m} -> type: {mtype}")
-            phase1_models.append((m, mtype))
+            phase1_models.append((m, mtype, "platform"))
 
         # 阶段二测试：本地列表中，标准化后不在平台列表的模型，且本地内部也要去重
         local_models = set(CHAT_MODELS + IMAGE_MODELS)
@@ -976,14 +974,14 @@ async def smart_test_stream(
             normalized = normalize_model_name(m)
             # 排除：1. 平台已有的  2. 本地已添加的（内部去重）
             if normalized not in platform_normalized and normalized not in phase2_normalized:
-                phase2_models.append((m, detect_model_type(m)))
+                phase2_models.append((m, detect_model_type(m), "local"))
                 phase2_normalized.add(normalized)
 
         all_models = phase1_models + phase2_models
 
         yield f"data: {json.dumps({'event': 'start', 'total': len(all_models), 'phase1': len(phase1_models), 'phase2': len(phase2_models)})}\n\n"
 
-        async def test_with_semaphore(model: str, model_type: str) -> dict:
+        async def test_with_semaphore(model: str, model_type: str, source: str) -> dict:
             async with semaphore:
                 if model_type == "chat":
                     if api_format == "anthropic":
@@ -997,6 +995,7 @@ async def smart_test_stream(
                                 result["model"] = model
                                 result["display_name"] = normalize_model_name(model)
                                 result["actual_model"] = variant
+                                result["source"] = source
                                 return result
                             last_error = result["error"]
                         return {
@@ -1006,11 +1005,16 @@ async def smart_test_stream(
                             "available": False,
                             "response_time_ms": 0,
                             "error": last_error,
+                            "source": source,
                         }
                     else:
-                        return await test_chat_model(session, base_url, api_key, model)
+                        result = await test_chat_model(session, base_url, api_key, model)
+                        result["source"] = source
+                        return result
                 elif model_type == "image":
-                    return await test_image_model(session, base_url, api_key, model)
+                    result = await test_image_model(session, base_url, api_key, model)
+                    result["source"] = source
+                    return result
                 else:  # both
                     # 先尝试 chat
                     if api_format == "anthropic":
@@ -1022,35 +1026,41 @@ async def smart_test_stream(
                                 result["display_name"] = normalize_model_name(model)
                                 result["actual_model"] = variant
                                 result["type"] = "chat"
+                                result["source"] = source
                                 return result
                     else:
                         result = await test_chat_model(session, base_url, api_key, model)
                         if result["available"]:
+                            result["source"] = source
                             return result
                     # chat 失败，尝试 image
                     result = await test_image_model(session, base_url, api_key, model)
                     result["type"] = "image"
+                    result["source"] = source
                     return result
 
         tasks = []
-        for model, mtype in all_models:
-            tasks.append(test_with_semaphore(model, mtype))
+        for model, mtype, msource in all_models:
+            tasks.append(test_with_semaphore(model, mtype, msource))
 
         results = await asyncio.gather(*tasks)
 
-        available_results = sorted(
-            [r for r in results if r["available"]],
-            key=lambda x: x["response_time_ms"]
-        )
-        unavailable_results = sorted(
-            [r for r in results if not r["available"]],
-            key=lambda x: x["model"]
-        )
+        # 排序：平台可用 > 本地可用 > 平台不可用 > 本地不可用
+        def sort_key(r):
+            source_priority = 0 if r.get("source") == "platform" else 1
+            available_priority = 0 if r["available"] else 1
+            if r["available"]:
+                return (source_priority, available_priority, r["response_time_ms"])
+            else:
+                return (source_priority, available_priority, r["model"])
 
-        for result in available_results + unavailable_results:
+        sorted_results = sorted(results, key=sort_key)
+
+        for result in sorted_results:
             yield f"data: {json.dumps(result)}\n\n"
 
-        yield f"data: {json.dumps({'event': 'complete', 'available': len(available_results), 'unavailable': len(unavailable_results)})}\n\n"
+        available_count = sum(1 for r in results if r["available"])
+        yield f"data: {json.dumps({'event': 'complete', 'available': available_count, 'unavailable': len(results) - available_count})}\n\n"
 
 
 @app.get("/", response_class=HTMLResponse)
