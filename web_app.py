@@ -756,6 +756,16 @@ async def _test_single_image_model(
                     result = json.loads(raw_data)
                 except json.JSONDecodeError:
                     text = raw_data.decode("utf-8", errors="replace")
+                    # 参数错误说明连接成功（如 "invalid"、"Bad Request"、"messages" 等参数相关错误）
+                    if response.status == 400 and ("invalid" in text.lower() or "Bad Request" in text or "messages" in text):
+                        URL_PATH_CACHE[base_url] = url.replace(base_url, "")
+                        return {
+                            "model": model,
+                            "type": "image",
+                            "available": True,
+                            "response_time_ms": round(elapsed_ms, 0),
+                            "error": None,
+                        }
                     last_result = {
                         "model": model,
                         "type": "image",
@@ -768,7 +778,22 @@ async def _test_single_image_model(
                     return last_result
 
                 if "error" in result:
-                    error_msg = result["error"].get("message", "Unknown error")
+                    error_obj = result["error"]
+                    if isinstance(error_obj, dict):
+                        error_msg = error_obj.get("message", "Unknown error")
+                        error_type = error_obj.get("type", "")
+                        # 参数错误（如size不支持）说明连接成功
+                        if "invalid" in error_type.lower() or "user_error" in error_type.lower():
+                            URL_PATH_CACHE[base_url] = url.replace(base_url, "")
+                            return {
+                                "model": model,
+                                "type": "image",
+                                "available": True,
+                                "response_time_ms": round(elapsed_ms, 0),
+                                "error": None,
+                            }
+                    else:
+                        error_msg = str(error_obj)
                     last_result = {
                         "model": model,
                         "type": "image",
@@ -776,7 +801,28 @@ async def _test_single_image_model(
                         "response_time_ms": round(elapsed_ms, 0),
                         "error": error_msg,
                     }
-                    # 返回了有效JSON（即使有错误），说明路径是对的
+                    return last_result
+
+                # 某些平台用 {"code": "01", "msg": "..."} 格式
+                if "msg" in result and result.get("code"):
+                    msg = result["msg"]
+                    # 参数错误说明连接成功
+                    if "invalid" in msg.lower() or "Bad Request" in msg:
+                        URL_PATH_CACHE[base_url] = url.replace(base_url, "")
+                        return {
+                            "model": model,
+                            "type": "image",
+                            "available": True,
+                            "response_time_ms": round(elapsed_ms, 0),
+                            "error": None,
+                        }
+                    last_result = {
+                        "model": model,
+                        "type": "image",
+                        "available": False,
+                        "response_time_ms": round(elapsed_ms, 0),
+                        "error": msg,
+                    }
                     return last_result
 
                 if "data" in result and len(result["data"]) > 0:
