@@ -41,7 +41,7 @@ DEFAULT_CHAT_MODELS = [
     "deepseek-chat", "deepseek-reasoner",
 ]
 
-DEFAULT_IMAGE_MODELS = ["dall-e-3", "dall-e-2", "gpt-image-1"]
+DEFAULT_IMAGE_MODELS = ["dall-e-3", "dall-e-2", "gpt-image-1", "gpt-image-2"]
 
 
 def load_models():
@@ -180,7 +180,11 @@ PLATFORM_RULES = {
         "openai_suffix": "/v3",
         "anthropic_suffix": "/anthropic",
         "model_list_endpoint": "/v3/models",
-        "cross_format": True,  # 支持跨格式获取模型列表
+        "cross_format": True,
+        "format_detection": {
+            "openai": ["/v3"],
+            "anthropic": ["/anthropic"],
+        },
     },
     "anthropic_official": {
         "patterns": ["api.anthropic.com"],
@@ -226,6 +230,17 @@ PLATFORM_RULES = {
         "openai_suffix": "/api/paas/v4/chat/completions",
         "model_list_endpoint": "/api/paas/v4/models",
     },
+    "volces_codingplan": {
+        "patterns": ["ark.cn-beijing.volces.com/api/coding"],
+        "anthropic_suffix": "/v1/messages",
+        "openai_suffix": "/v3/chat/completions",
+        "model_list_endpoint": "/v3/models",
+        "cross_format": True,
+        "format_detection": {
+            "openai": ["/v3"],
+            "anthropic": [],
+        },
+    },
 }
 
 
@@ -235,6 +250,33 @@ def detect_platform(base_url: str) -> str | None:
         for pattern in rules.get("patterns", []):
             if pattern in base_url:
                 return platform
+    return None
+
+
+def detect_format_from_url(base_url: str, platform: str) -> str | None:
+    """根据平台规则从 URL 判断 API 格式"""
+    rules = PLATFORM_RULES.get(platform, {})
+    detection = rules.get("format_detection")
+    if not detection:
+        return rules.get("default_format")
+
+    base = base_url.rstrip('/')
+
+    # 检查 OpenAI 模式
+    for pattern in detection.get("openai", []):
+        if pattern and pattern in base:
+            return "openai"
+
+    # 检查 Anthropic 模式
+    for pattern in detection.get("anthropic", []):
+        if pattern and pattern in base:
+            return "anthropic"
+
+    # 如果有 format_detection 但没匹配到明确模式
+    # 聚合平台通常：含 openai 模式 → 已检测，否则看 anthropic 是否为空
+    if detection.get("anthropic") == []:
+        return "anthropic"
+
     return None
 
 
@@ -300,8 +342,12 @@ async def fetch_platform_models(base_url: str, api_key: str) -> list[str]:
 
     # 3. 通用探测：尝试常见的模型列表URL
     urls = build_model_list_urls(base_url)
+    # DEBUG
+    import json
+    print(f"[DEBUG] Trying URLs: {urls}")
     for url in urls:
         models = await fetch_from_url(url, headers)
+        print(f"[DEBUG] URL {url} returned: {models[:3] if models else 'empty'}...")
         if models:
             return models
 
@@ -580,6 +626,13 @@ async def detect_api_format(
     """
     探测API格式，返回 "openai" 或 "anthropic"
     """
+    # 0. 优先使用平台规则的 URL 模式匹配
+    platform = detect_platform(base_url)
+    if platform:
+        format_from_url = detect_format_from_url(base_url, platform)
+        if format_from_url:
+            return format_from_url
+
     # 1. 尝试OpenAI格式
     urls = build_api_urls(base_url, "chat/completions")
     headers = {
@@ -805,13 +858,32 @@ async def test_image_model(
     }
 
 
+def detect_model_type(model_name: str) -> str:
+    """根据模型名称判断类型"""
+    model_lower = model_name.lower()
+    # 仅用 image 端点
+    image_only_keywords = ["dall-e", "stable-diffusion", "midjourney"]
+    for kw in image_only_keywords:
+        if kw in model_lower:
+            return "image"
+    # 双重测试：先 chat，失败再 image
+    image_both_keywords = ["gpt-image", "imagen"]
+    for kw in image_both_keywords:
+        if kw in model_lower:
+            return "both"
+    # 检查 -image 后缀（如 gemini-2.5-flash-image）
+    if "-image" in model_lower:
+        return "both"
+    return "chat"
+
+
 async def test_all_models_stream(
     base_url: str, api_key: str
 ) -> AsyncGenerator[str, None]:
     """Test all models and yield results as SSE events."""
     semaphore = asyncio.Semaphore(5)
     global CHAT_MODELS, IMAGE_MODELS
-    all_models = [(m, "chat") for m in CHAT_MODELS] + [(m, "image") for m in IMAGE_MODELS]
+    all_models = [(m, detect_model_type(m)) for m in CHAT_MODELS] + [(m, detect_model_type(m)) for m in IMAGE_MODELS]
 
     async with aiohttp.ClientSession() as session:
 
@@ -819,8 +891,15 @@ async def test_all_models_stream(
             async with semaphore:
                 if model_type == "chat":
                     return await test_chat_model(session, base_url, api_key, model)
-                else:
+                elif model_type == "image":
                     return await test_image_model(session, base_url, api_key, model)
+                else:  # both
+                    result = await test_chat_model(session, base_url, api_key, model)
+                    if result["available"]:
+                        return result
+                    result = await test_image_model(session, base_url, api_key, model)
+                    result["type"] = "image"
+                    return result
 
         yield f"data: {json.dumps({'event': 'start', 'total': len(all_models)})}\n\n"
 
@@ -869,6 +948,10 @@ async def smart_test_stream(
 
         platform_models = await fetch_platform_models(base_url, api_key)
 
+        # DEBUG
+        if "gpt-image" in str(platform_models):
+            yield f"data: {json.dumps({'event': 'debug_platform', 'models': platform_models})}\n\n"
+
         if platform_models:
             yield f"data: {json.dumps({'event': 'info', 'message': f'平台返回 {len(platform_models)} 个模型'})}\n\n"
         else:
@@ -877,8 +960,13 @@ async def smart_test_stream(
         # 标准化平台模型名称，用于去重
         platform_normalized = {normalize_model_name(m) for m in platform_models}
 
-        # 阶段一测试：平台模型
-        phase1_models = [(m, "chat") for m in platform_models]
+        # 阶段一测试：平台模型（智能判断类型）
+        phase1_models = []
+        for m in platform_models:
+            mtype = detect_model_type(m)
+            # DEBUG: 打印所有模型的类型
+            print(f"[DEBUG] Platform model: {m} -> type: {mtype}")
+            phase1_models.append((m, mtype))
 
         # 阶段二测试：本地列表中，标准化后不在平台列表的模型，且本地内部也要去重
         local_models = set(CHAT_MODELS + IMAGE_MODELS)
@@ -888,7 +976,7 @@ async def smart_test_stream(
             normalized = normalize_model_name(m)
             # 排除：1. 平台已有的  2. 本地已添加的（内部去重）
             if normalized not in platform_normalized and normalized not in phase2_normalized:
-                phase2_models.append((m, "chat" if m in CHAT_MODELS else "image"))
+                phase2_models.append((m, detect_model_type(m)))
                 phase2_normalized.add(normalized)
 
         all_models = phase1_models + phase2_models
@@ -921,8 +1009,28 @@ async def smart_test_stream(
                         }
                     else:
                         return await test_chat_model(session, base_url, api_key, model)
-                else:
+                elif model_type == "image":
                     return await test_image_model(session, base_url, api_key, model)
+                else:  # both
+                    # 先尝试 chat
+                    if api_format == "anthropic":
+                        variants = get_model_name_variants(model)
+                        for variant in variants:
+                            result = await _test_single_anthropic_model(session, base_url, api_key, variant, time.perf_counter())
+                            if result["available"]:
+                                result["model"] = model
+                                result["display_name"] = normalize_model_name(model)
+                                result["actual_model"] = variant
+                                result["type"] = "chat"
+                                return result
+                    else:
+                        result = await test_chat_model(session, base_url, api_key, model)
+                        if result["available"]:
+                            return result
+                    # chat 失败，尝试 image
+                    result = await test_image_model(session, base_url, api_key, model)
+                    result["type"] = "image"
+                    return result
 
         tasks = []
         for model, mtype in all_models:
